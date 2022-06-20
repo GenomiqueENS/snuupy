@@ -103,7 +103,9 @@ def addPolyATag(
 
     for read in bamFile:
         readUmiBarcode = '_'.join(read.qname.split('_')[:2])
-        polyALength = addPolyAResult[readUmiBarcode]
+        try:
+            polyALength = addPolyAResult[readUmiBarcode]
+        except : pass
         read.set_tag(polyATag, polyALength, "f")
         outBamFile.write(read)
     outBamFile.close()

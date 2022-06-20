@@ -75,7 +75,7 @@ def generateNanoporeWindow(GENOME_INDEX, BAM_PATH, OUT_PATH, WINDOW, useColumn, 
     """
     os.system(f'samtools index {BAM_PATH}')
     genomeUpper = getGenomeUpper(GENOME_INDEX, WINDOW, useColumn)
-    with ThreadPoolExecutor(2) as multiT:
+    with ThreadPoolExecutor(29) as multiT:
         sh.mkdir(OUT_PATH, p=True)
         for chr_, upperLimit in genomeUpper.items():
             bamChrFetch = pysam.AlignmentFile(BAM_PATH).fetch(str(chr_))

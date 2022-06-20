@@ -161,7 +161,7 @@ def polishReads(
     
     os.system(
         f"""
-    cat {finalResultsDir}* | {seqkitPath} seq -rp > {polishedRead} && sleep 15 &&\
+    find {finalResultsDir} -type f -print0 | xargs -0 -P {threads} {seqkitPath} seq -rp > {polishedRead} && sleep 15 &&\
     mkdir /tmp/empty &&\
     rsync --delete-before -av /tmp/empty/ {finalResultsDir}/ &&\
     rsync --delete-before -av /tmp/empty/ {tempResultsDir}/ 

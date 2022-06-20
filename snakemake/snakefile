@@ -1,6 +1,9 @@
-configfile: "/public/home/liuzj/github/snuupy/snakemake/config.yaml"
-pipelineDir = config['pipelineDir']
+import os
 
+configfile: "/usr/local/snuupy/snakemake/config.yaml"
+pipelineDir = config['pipelineDir']
+resultDir = config['resultDir']
+split=True
 
 rule all:
     input:
@@ -28,13 +31,13 @@ rule parseIllumina:
         parseIlluminaResults = f"{config['resultDir']}step2_parseIllumina/parseIlluminaResults.index"
     params:
         genomeFai = config['genomeFai'],
-        useBarcodeGz = f"{config['resultDir']}step1_runCellRanger/test/outs/filtered_feature_bc_matrix/barcodes.tsv.gz",
-        useBarcode = f"{config['resultDir']}step1_runCellRanger/test/outs/filtered_feature_bc_matrix/barcodes.tsv",
-        runCellRangerBam = f"{config['resultDir']}step1_runCellRanger/test/outs/possorted_genome_bam.bam",
+        useBarcodeGz = f"{config['resultDir']}step1_runCellRanger/mm10/outs/filtered_feature_bc_matrix/barcodes.tsv.gz",
+        useBarcode = f"{config['resultDir']}step1_runCellRanger/mm10/outs/filtered_feature_bc_matrix/barcodes.tsv",
+        runCellRangerBam = f"{config['resultDir']}step1_runCellRanger/mm10/outs/possorted_genome_bam.bam",
         windowSize = 500,
         gpu = "0"
 
-    threads:2
+    threads:24
     shell:
         """
 cd {pipelineDir}
@@ -60,21 +63,78 @@ cd {pipelineDir}
 {params.minimap2Path} -ax splice --secondary=no -uf --MD --sam-hit-only -t {threads} --junc-bed {params.geneAnnoBed} {params.genomeFa} {input.rawNanoporeFa} | samtools sort - -o {output.rawMappingResult} && samtools index {output.rawMappingResult}
         """
 
+
+
+
+
+
+
+
+checkpoint splitBam:
+     input: f"{config['resultDir']}step3_minimapMappingRaw/rawMappingResult.bam"
+     output: directory(f"{config['resultDir']}step3_minimapMappingRaw/splitBam")
+     params :
+         prefix = 'rawMappingResult'
+     threads:56
+     shell:
+           """
+           mkdir -p {output}
+           picard SplitSamByNumberOfReads I={input} O={output}  N_READS=10000000 OUT_PREFIX={params.prefix} VALIDATION_STRINGENCY=SILENT
+           """
+
 rule addUnmappedBaseTag:
     input:
-        rawMappingResult = f"{config['resultDir']}step3_minimapMappingRaw/rawMappingResult.bam"
+        rawMappingResult = resultDir + "step3_minimapMappingRaw/splitBam/rawMappingResult_0{i}.bam"
+    output:
+        rawMappingResultAddUnmappedTag = temp(resultDir + "step4_addUnmappedBaseTag/splitBam/rawMappingResultAddUnmappedTag_0{i}.bam"),
+        readNameFile = temp(resultDir + "step4_addUnmappedBaseTag/splitBam/readNamesFile_0{i}.txt"),
+        subFasta = temp(resultDir + "step4_addUnmappedBaseTag/splitFasta/subFasta_0{i}.fa")
+    params:
+        rawNanoporeFa = config['rawNanoporeFa'],
+        BamOutdir = resultDir + "step4_addUnmappedBaseTag/splitBam/",
+        FastaOutDir = resultDir + "step4_addUnmappedBaseTag/splitFasta/",
+        gpu = "0"
+
+    threads:24
+    shell:
+        """
+    mkdir -p {params.FastaOutDir}
+    mkdir -p  {params.BamOutdir}
+    samtools view {input.rawMappingResult} | cut -f1 | sort -u > {output.readNameFile} &&
+    seqtk subseq {params.rawNanoporeFa} {output.readNameFile} > {output.subFasta} &&
+    cd {pipelineDir}
+    samtools index {input.rawMappingResult} &&
+    python ./snuupy/snuupy.py addUnmappedBaseTag -i {input.rawMappingResult} -f {output.subFasta} -o {output.rawMappingResultAddUnmappedTag}
+         """
+
+def aggregate_input(wildcards):
+    checkpoint_output = checkpoints.splitBam.get(**wildcards).output[0]
+    return expand(resultDir + "step4_addUnmappedBaseTag/splitBam/rawMappingResultAddUnmappedTag_0{i}.bam",
+           i=glob_wildcards(os.path.join(checkpoint_output, "rawMappingResult_0{i}.bam")).i)
+
+
+
+rule mergeBam:
+    input:
+        flagueTag = aggregate_input
     output:
         rawMappingResultAddUnmappedTag = f"{config['resultDir']}step4_addUnmappedBaseTag/rawMappingResultAddUnmappedTag.bam"
     params:
         rawNanoporeFa = config['rawNanoporeFa'],
         gpu = "0"
 
-    threads:2
+    threads:24
     shell:
         """
-cd {pipelineDir}
-python ./snuupy/snuupy.py addUnmappedBaseTag -i {input.rawMappingResult} -f {params.rawNanoporeFa} -o {output.rawMappingResultAddUnmappedTag}
+        samtools merge {output.rawMappingResultAddUnmappedTag} {input.flagueTag}
         """
+
+
+
+
+
+
+
 
 rule generateNanoporeWindow:
     input:
@@ -87,7 +147,7 @@ rule generateNanoporeWindow:
         windowSize = 500,
         gpu = "0"
 
-    threads:2
+    threads:12
     shell:
         """
 cd {pipelineDir}
@@ -103,7 +163,7 @@ rule generateIlluminaWindow:
         generateIlluminaWindow = f"{config['resultDir']}step6_generateIlluminaWindow/generateIlluminaWindow/",
         gpu = "0"
 
-    threads:2
+    threads:24
     shell:
         """
 cd {pipelineDir}
@@ -130,39 +190,76 @@ cd {pipelineDir}
 python ./snuupy/snuupy.py windowBlast -i {params.generateIlluminaWindow} -n {params.generateNanoporeWindow} -o {params.blastResults} -t {threads} -b {params.blastPath} && touch {output.windowBlastFinished}
         """
 
+
+
+
+
+
+checkpoint splitWindowBlast:
+     input:
+         allResult = f"{config['resultDir']}step7_windowBlast/blastResults/allResult.result",
+         windowBlastFinished = f"{config['resultDir']}step7_windowBlast/windowBlastFinished.empty"
+     output: directory(f"{config['resultDir']}step7_windowBlast/blastResults/splitWindowBlast")
+     params :
+         prefix = 'splitedResult.',
+         splited = f"{config['resultDir']}step7_windowBlast/blastResults/splitedResult.*",
+         blastResDir = f"{config['resultDir']}step7_windowBlast/blastResults/",
+         nSplit = 79695813 # line per file
+     threads:56
+     shell:
+           """
+           mkdir -p {output}
+           cd {params.blastResDir}
+           split -d -l {params.nSplit} {input.allResult} {params.prefix}
+           mv {params.splited} {output}
+           """
+
 rule getMismatch:
     input:
-        windowBlastFinished = f"{config['resultDir']}step7_windowBlast/windowBlastFinished.empty",
-        rawMappingResultAddUnmappedTag = f"{config['resultDir']}step4_addUnmappedBaseTag/rawMappingResultAddUnmappedTag.bam"
+        rawMappingResultAddUnmappedTag = f"{config['resultDir']}step4_addUnmappedBaseTag/rawMappingResultAddUnmappedTag.pkl",
+        windowBlastMerged = resultDir +"step7_windowBlast/blastResults/splitWindowBlast/splitedResult.{i}"
     output:
-        nanoporeED = f"{config['resultDir']}step8_getMismatch/nanoporeED.feather"
+        nanoporeED = resultDir +"step8_getMismatch/allnanoporeED/nanoporeED_{i}.feather"
     params:
-        windowBlastMerged = f"{config['resultDir']}step7_windowBlast/blastResults/allResult.result",
+        outdir = resultDir +"step8_getMismatch/allnanoporeED",
         gpu = "0"
-
     threads:56
     shell:
         """
-cd {pipelineDir}
-python ./snuupy/snuupy.py getMismatch -i {params.windowBlastMerged} -b {input.rawMappingResultAddUnmappedTag} -o {output.nanoporeED} -t {threads}
+        mkdir -p {params.outdir}
+        cd {pipelineDir}
+        python ./snuupy/snuupy.py getMismatch  --kit v3 -i {input.windowBlastMerged} -b {input.rawMappingResultAddUnmappedTag} -o {output.nanoporeED} -t {threads}
         """
+
+
+def aggregate_nanoporeED(wildcards):
+    checkpoint_output = checkpoints.splitWindowBlast.get(**wildcards).output[0]
+    return expand(resultDir + "step8_getMismatch/allnanoporeED/nanoporeED_{i}.feather",
+           i=glob_wildcards(os.path.join(checkpoint_output, "splitedResult.{i}")).i)
+
 
 rule barcodeAssignment:
     input:
-        nanoporeED = f"{config['resultDir']}step8_getMismatch/nanoporeED.feather"
+        allNanoporeED = aggregate_nanoporeED
     output:
         nanoporeAssigned = f"{config['resultDir']}step9_barcodeAssignment/nanoporeAssigned.feather"
     params:
-        barcodeED = 3,
-        umiED = 3,
-        gpu = "0"
+        gpu = "0",
+        barcodeED = 2,
+        umiED = 2
 
-    threads:2
+    threads:30
     shell:
         """
-cd {pipelineDir}
-python ./snuupy/snuupy.py barcodeAssignment -i {input.nanoporeED} -o {output.nanoporeAssigned} --ED-barcode {params.barcodeED} --ED-UMI {params.umiED}
+        cd {pipelineDir}
+        python ./snuupy/barcodeAssignment.py -i {input.allNanoporeED} -o {output.nanoporeAssigned} --ED-barcode {params.barcodeED} --ED-UMI {params.umiED}
         """
+
+
+
+
+
+
 
 rule polishReads:
     input:
@@ -213,7 +310,7 @@ rule addGeneName:
         bedtoolsPath = config['bedtoolsPath'],
         gpu = "0"
 
-    threads:2
+    threads:24
     shell:
         """
 cd {pipelineDir}
@@ -231,7 +328,7 @@ rule getSpliceInfo:
         geneAnnoRepreBed = config['geneAnnoRepreBed'],
         gpu = "0"
 
-    threads:2
+    threads:24
     shell:
         """
 cd {pipelineDir}
@@ -295,7 +392,7 @@ rule generateMtx:
         apaCluster = f"{config['resultDir']}step15_polyAClusterDetected/polyACluster/polya_cluster.filtered.bed",
         gpu = "0"
 
-    threads:2
+    threads:24
     shell:
         """
 cd {pipelineDir}

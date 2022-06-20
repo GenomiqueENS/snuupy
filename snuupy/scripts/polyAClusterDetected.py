@@ -156,13 +156,14 @@ def filterPAC(fastaPath, bedPath, bedSummitPath, fillterPolyASitePath):
     )
 
 
-def polyAClusterDetected(fastaPath, infile, gene_bed, out_suffix, threads, is_bed12=False):
+def polyAClusterDetected(fastaPath, infile, gene_bed, out_suffix, threads, is_bed12=True):
     try:
         os.mkdir(out_suffix)
     except:
         logger.warning(f"{out_suffix} existed!")
     gene_model = pr.read_bed(gene_bed, as_df=True)
     gene_model["Chromosome"] = gene_model["Chromosome"].astype(str)
+    is_bed12 = True
     if is_bed12:
         # transfer bed12 to bed
         gene_model = gene_model.assign(Gene = lambda df:df['Name'].str.split("\|").str[-1], GeneBiotype = lambda df:df['Name'].str.split("\|").str[-2])

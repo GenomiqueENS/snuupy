@@ -8,7 +8,7 @@ from concurrent.futures import ProcessPoolExecutor
 from joblib import Parallel, delayed
 from more_itertools import chunked
 from tqdm import tqdm
-
+import pickle
 
 def getAlignScore(line):
     barcodeUmi = line[0]
@@ -26,7 +26,7 @@ def getAlignScore(line):
         umi = barcodeUmi[1]
         barcodeUmi = "".join(barcodeUmi)
 
-        mappingResult = [aligner.align(barcodeUmi, x) for x in unmappedSeq]
+        mappingResult = [aligner.align(barcodeUmi, x) for x in unmappedSeq if isinstance(x, str)]
         mappingScore = [x.score for x in mappingResult]
         barcodeUmiScore = max(mappingScore)
         bestScoreIndex = mappingScore.index(barcodeUmiScore)
@@ -72,44 +72,14 @@ def getMismatch(MAPPING_RESULT, ADD_SEQ_BAM, OUT_FEATHER, THREADS, KIT, BY_PRIME
         blastResult.columns = ['sseqid', 'qseqid']
         blastResult = blastResult.reindex(columns=['qseqid', 'sseqid'])
 
-    addSeqBam = pysam.AlignmentFile(ADD_SEQ_BAM, "r")
+    print('Loading BAM ...')
+    pkBam = open(ADD_SEQ_BAM, 'rb')
+    bamDict = pickle.load(pkBam)
+    print('BAM loading done!')
 
-    seqTransformer = jseq()
-    bamDict = defaultdict(lambda: [])
-
-    for x in tqdm(addSeqBam, "parse bam file", total=addSeqBam.mapped):
-        if not BY_PRIMER:
-            readESSeq = x.get_tag("ES")
-            readFSSeq = x.get_tag("FS")
-            if x.is_reverse:
-                readStrand = 1
-            else:
-                readStrand = 0
-            bamDict[x.qname].extend(
-                [
-                    readESSeq,
-                    seqTransformer.reverseComplement(readESSeq),
-                    readFSSeq,
-                    seqTransformer.reverseComplement(readFSSeq),
-                    readStrand,
-                ]
-            )
-        else:
-            readPSSeq = x.get_tag("PS")
-            if x.is_reverse:
-                readStrand = 1
-            else:
-                readStrand = 0
-            bamDict[x.qname].extend(
-                [
-                    readPSSeq,
-                    seqTransformer.reverseComplement(readPSSeq),
-                    readStrand,
-                ]
-            )
-
+    print('processing Blast results ...')
     blastResult.drop_duplicates(["qseqid", "sseqid"], inplace=True)
-    blastResult["name"] = blastResult["sseqid"].str.split("_", expand=True)[0]
+    blastResult["name"] = blastResult["sseqid"].str.split("_PAH78611_", expand=True)[0] + '_PAH78611'
     blastResult["unmappedSeq"] = blastResult["name"].map(bamDict)
     
     blastResult["unmappedSeq"], blastResult["readStrand"] = (
@@ -122,7 +92,7 @@ def getMismatch(MAPPING_RESULT, ADD_SEQ_BAM, OUT_FEATHER, THREADS, KIT, BY_PRIME
         THREADS * 5000 * 2,
     )
     alignResult = []
-    for chunkBlastResult in tqdm(iterBlastResult, 'get align score', total=(len(blastResult) // (THREADS * 5000 * 2) + 1)):
+    for chunkBlastResult in tqdm(iterBlastResult, 'get align score', total=(len(blastResult) // (THREADS * 5000 * 2) + 1), ascii=True):
         _ls = Parallel(THREADS, batch_size=1000)(
             delayed(getAlignScore)(x) for x in chunkBlastResult
         )
